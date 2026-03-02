@@ -12,27 +12,26 @@ class SetupWizard:
         self.key_manager = KeyManager()
 
         self.window = tk.Toplevel(root)
-        self.window.title("Первоначальная настройка")
-        self.window.geometry("300x200")
+        self.window.title("Настройка")
+        self.window.geometry("300x150")
 
-        tk.Label(self.window, text="Придумайте мастер-пароль").pack(pady=10)
+        tk.Label(self.window, text="Мастер-пароль").pack(pady=10)
         self.pass_entry = tk.Entry(self.window, show="*")
-        self.pass_entry.pack(pady=5)
+        self.pass_entry.pack()
 
-        tk.Button(self.window, text="Создать хранилище", command=self.create).pack(pady=20)
+        tk.Button(self.window, text="Готово", command=self.create).pack(pady=10)
 
     def create(self):
-        password = self.pass_entry.get()
-        if len(password) < 4:
-            messagebox.showerror("Ошибка", "Пароль слишком короткий")
+        pwd = self.pass_entry.get()
+        if len(pwd) < 4:
+            messagebox.showerror("Ошибка", "Пароль короткий")
             return
 
         db.connect()
 
-        salt = b'static_salt_for_sprint1'
-        key = self.key_manager.derive_key(password, salt)
+        key = self.key_manager.derive_key(pwd, b'salt123')
         self.key_manager.store_key(key)
-        state.login()
 
+        state.login()
         self.window.destroy()
         self.on_complete()
