@@ -13,6 +13,14 @@ class TestCrypto(unittest.TestCase):
 
         self.assertEqual(data, decrypted)
 
-
+    def test_key_manager_clear(self):
+        from src.core.key_manager import KeyManager
+        km = KeyManager()
+        key = b"testkey123"
+        km.store_key(key)
+        self.assertIsNotNone(km.load_key())
+        km.clear_key()
+        self.assertIsNone(km.load_key())
+        print("Тест очистки ключа прошел")
 if __name__ == '__main__':
     unittest.main()
