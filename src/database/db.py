@@ -2,20 +2,19 @@ import sqlite3
 import os
 from src.core.config import config
 
+
 class Database:
     def __init__(self):
         self.db_path = config.get("db_path", "vault.db")
         self.conn = None
 
     def connect(self):
-        # Создаем папку если нет
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._create_tables()
 
     def _create_tables(self):
         cursor = self.conn.cursor()
-        # Таблица записей
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS vault_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,7 +28,6 @@ class Database:
                 tags TEXT
             )
         ''')
-        # Таблица логов (заглушка)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +38,6 @@ class Database:
                 signature TEXT
             )
         ''')
-        # Настройки
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS settings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +46,28 @@ class Database:
                 encrypted INTEGER DEFAULT 0
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS master_password (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS key_store (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                key_type TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                hash TEXT,
+                params TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Добавляем версию базы данных
+        cursor.execute("PRAGMA user_version = 1")
+
         self.conn.commit()
 
     def execute(self, query, params=None):
@@ -71,5 +90,6 @@ class Database:
     def close(self):
         if self.conn:
             self.conn.close()
+
 
 db = Database()
