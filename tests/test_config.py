@@ -18,12 +18,12 @@ class TestConfig(unittest.TestCase):
         config = Config()
         config.set("theme", "dark")
         self.assertEqual(config.get("theme"), "dark")
-        print("✅ Тест set/get прошел")
+        print("Тест set/get прошел")
 
     def test_config_default(self):
         config = Config()
         self.assertEqual(config.get("not_exists", "default"), "default")
-        print("✅ Тест default значения прошел")
+        print("Тест default значения прошел")
 
 
 if __name__ == '__main__':

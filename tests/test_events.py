@@ -23,7 +23,7 @@ class TestEvents(unittest.TestCase):
 
         # Проверяем что данные пришли
         self.assertEqual(received_data, test_data)
-        print("✅ Тест подписки/публикации прошел")
+        print(" Тест подписки/публикации прошел")
 
     def test_multiple_subscribers(self):
         count1 = 0
@@ -72,7 +72,7 @@ class TestEvents(unittest.TestCase):
         # Второе событие не должно прийти
         self.assertEqual(result1, "data for event1")
         self.assertIsNone(result2)
-        print("✅ Тест разных событий прошел")
+        print("Тест разных событий прошел")
 
 
 if __name__ == '__main__':

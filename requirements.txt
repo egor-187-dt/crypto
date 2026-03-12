@@ -1,3 +1,6 @@
-# Зависимости для CryptoSafe Manager
-# Пока используем только стандартную библиотеку, но файл нужен для формы
-# pytest==7.4.0
+
+# Зависимости для CryptoSafe Manager (Sprint 2)
+argon2-cffi==23.1.0
+cryptography==41.0.7
+keyring==24.3.0
+pytest==7.4.0

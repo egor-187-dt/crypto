@@ -20,7 +20,7 @@ class TestDBFixture:
                 id INTEGER PRIMARY KEY,
                 title TEXT,
                 username TEXT,
-                encrypted_password BLOB
+                encrypted_password TEXT
             )
         ''')
 

@@ -20,7 +20,7 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT,
                 username TEXT,
-                encrypted_password BLOB,
+                encrypted_password TEXT,
                 url TEXT,
                 notes TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -54,19 +54,22 @@ class Database:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # Создаем таблицу key_store с правильной структурой
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS key_store (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 key_type TEXT NOT NULL,
-                salt TEXT NOT NULL,
+                salt TEXT,
                 hash TEXT,
+                key_data TEXT,
                 params TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
         # Добавляем версию базы данных
-        cursor.execute("PRAGMA user_version = 1")
+        cursor.execute("PRAGMA user_version = 2")
 
         self.conn.commit()
 
@@ -86,6 +89,17 @@ class Database:
         else:
             cursor.execute(query)
         return cursor.fetchall()
+
+    def table_has_column(self, table_name, column_name):
+        """Проверяет, есть ли колонка в таблице"""
+        try:
+            columns = self.fetch_all(f"PRAGMA table_info({table_name})")
+            for col in columns:
+                if col[1] == column_name:
+                    return True
+        except:
+            pass
+        return False
 
     def close(self):
         if self.conn:

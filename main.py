@@ -2,22 +2,27 @@ import tkinter as tk
 from src.gui.setup_wizard import SetupWizard
 from src.gui.main_window import MainWindow
 from src.database.db import db
+from src.database.migration import run_migrations
 import os
 
 
 def main():
     root = tk.Tk()
 
-    # Сразу подключаем БД
+    # Подключаем БД
     db.connect()
 
-    # Проверяем, существует ли таблица master_password и есть ли в ней запись
+    # Запускаем миграции
     try:
-        # Проверяем структуру таблицы
+        run_migrations()
+    except Exception as e:
+        print(f"Ошибка миграции: {e}")
+
+    # Проверка, существует ли таблица master_password и есть ли в ней запись
+    try:
         tables = db.fetch_all("SELECT name FROM sqlite_master WHERE type='table' AND name='master_password'")
 
         if tables:
-            # Таблица есть, проверяем есть ли пароль
             rows = db.fetch_all("SELECT COUNT(*) FROM master_password")
             if rows and rows[0][0] > 0:
                 # Мастер-пароль есть - сразу главное окно
@@ -42,7 +47,6 @@ def main():
             wizard = SetupWizard(root, on_setup)
 
     except Exception as e:
-        # Если ошибка - тоже настройка
         print(f"Ошибка при проверке: {e}")
         root.withdraw()
 
