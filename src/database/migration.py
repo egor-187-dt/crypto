@@ -58,10 +58,86 @@ class Migration:
         Migration.set_version(2)
         print("Миграция на версию 2 завершена")
 
+    @staticmethod
+    def migrate_to_v3():
+        """Миграция для спринта 3"""
+        print("Запуск миграции на версию 3...")
+
+        # Проверяем существующие колонки в vault_entries
+        columns = db.fetch_all("PRAGMA table_info(vault_entries)")
+        col_names = [col[1] for col in columns]
+
+        # Добавляем колонку deleted если нет
+        if 'deleted' not in col_names:
+            print("Добавляем колонку deleted")
+            db.execute("ALTER TABLE vault_entries ADD COLUMN deleted INTEGER DEFAULT 0")
+
+        # Добавляем колонку deleted_at если нет
+        if 'deleted_at' not in col_names:
+            print("Добавляем колонку deleted_at")
+            db.execute("ALTER TABLE vault_entries ADD COLUMN deleted_at TIMESTAMP")
+
+        # Добавляем колонку encrypted_data если нет
+        if 'encrypted_data' not in col_names:
+            print("Добавляем колонку encrypted_data")
+            db.execute("ALTER TABLE vault_entries ADD COLUMN encrypted_data BLOB")
+
+        # Добавляем колонку id если еще TEXT (раньше был INTEGER)
+        if 'id' in col_names:
+            # Проверяем тип колонки id
+            for col in columns:
+                if col[1] == 'id' and col[2] != 'TEXT':
+                    print("Конвертируем id в TEXT")
+                    # Создаем временную таблицу
+                    db.execute('''
+                        CREATE TABLE vault_entries_temp (
+                            id TEXT PRIMARY KEY,
+                            title TEXT,
+                            username TEXT,
+                            encrypted_password TEXT,
+                            url TEXT,
+                            notes TEXT,
+                            created_at TIMESTAMP,
+                            updated_at TIMESTAMP,
+                            tags TEXT,
+                            deleted INTEGER DEFAULT 0,
+                            deleted_at TIMESTAMP,
+                            encrypted_data BLOB
+                        )
+                    ''')
+
+                    # Копируем данные
+                    db.execute('''
+                        INSERT INTO vault_entries_temp (id, title, username, encrypted_password, url, notes, created_at, updated_at, tags)
+                        SELECT CAST(id AS TEXT), title, username, encrypted_password, url, notes, created_at, updated_at, tags
+                        FROM vault_entries
+                    ''')
+
+                    # Удаляем старую таблицу
+                    db.execute("DROP TABLE vault_entries")
+
+                    # Переименовываем временную
+                    db.execute("ALTER TABLE vault_entries_temp RENAME TO vault_entries")
+
+        # Создаем индексы
+        print("Создаем индексы...")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_entries_title ON vault_entries(title)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_entries_updated ON vault_entries(updated_at)")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_entries_deleted ON vault_entries(deleted)")
+
+        # Обновляем версию
+        Migration.set_version(3)
+        print("Миграция на версию 3 завершена")
+
 
 # Функция для автоматического запуска миграций
 def run_migrations():
     version = Migration.get_version()
     print(f"Текущая версия БД: {version}")
+
     if version < 2:
         Migration.migrate_to_v2()
+        version = Migration.get_version()
+
+    if version < 3:
+        Migration.migrate_to_v3()

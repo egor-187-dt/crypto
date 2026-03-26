@@ -53,7 +53,7 @@ class ChangePasswordDialog:
         pwd = self.new_pass.get()
 
         if len(pwd) < 12:
-            self.strength_label.config(text="❌ Слишком короткий (нужно 12+)", fg="red")
+            self.strength_label.config(text="Слишком короткий (нужно 12+)", fg="red")
             return False
 
         has_upper = any(c.isupper() for c in pwd)
@@ -62,13 +62,13 @@ class ChangePasswordDialog:
         has_special = any(not c.isalnum() for c in pwd)
 
         if has_upper and has_lower and has_digit and has_special:
-            self.strength_label.config(text="✅ Очень сильный пароль", fg="green")
+            self.strength_label.config(text="Очень сильный пароль", fg="green")
             return True
         elif has_upper and has_lower and has_digit:
-            self.strength_label.config(text="⚠️ Хороший, добавь спецсимволы", fg="orange")
+            self.strength_label.config(text="Хороший, добавь спецсимволы", fg="orange")
             return True
         else:
-            self.strength_label.config(text="❌ Слабый (нужны буквы, цифры, символы)", fg="red")
+            self.strength_label.config(text="Слабый (нужны буквы, цифры, символы)", fg="red")
             return False
 
     def change(self):
