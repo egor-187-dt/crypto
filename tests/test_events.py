@@ -48,7 +48,7 @@ class TestEvents(unittest.TestCase):
         # Оба должны получить 3 события
         self.assertEqual(count1, 3)
         self.assertEqual(count2, 3)
-        print("✅ Тест нескольких подписчиков прошел")
+        print(" Тест нескольких подписчиков прошел")
 
     def test_different_events(self):
         result1 = None

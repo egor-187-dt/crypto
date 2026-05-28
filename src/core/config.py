@@ -7,35 +7,102 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 DB_PATH = os.path.join(DATA_DIR, 'vault.db')
 CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
 
+
 class Config:
     def __init__(self):
         self.data = {}
         self.load()
 
     def load(self):
-        # Если файла нет, создаем пустой
+
         if not os.path.exists(CONFIG_FILE):
             if not os.path.exists(DATA_DIR):
                 os.makedirs(DATA_DIR)
-            self.data = {"db_path": DB_PATH, "theme": "default"}
+            self.data = self._get_default_config()
             self.save()
         else:
             try:
                 with open(CONFIG_FILE, 'r') as f:
                     self.data = json.load(f)
-            except:
-                self.data = {"db_path": DB_PATH}
+                # Объединяем с дефолтными значениями (новые ключи)
+                defaults = self._get_default_config()
+                for key, value in defaults.items():
+                    if key not in self.data:
+                        self.data[key] = value
+            except Exception:
+                self.data = self._get_default_config()
+
+    def _get_default_config(self) -> dict:
+
+        return {
+            "db_path": DB_PATH,
+            "theme": "default",
+            "language": "ru",
+            # Параметры Argon2id (ТЗ: time=3, memory=65536, parallel=4)
+            "argon2_time": 3,
+            "argon2_memory": 65536,
+            "argon2_parallelism": 4,
+            # Параметры PBKDF2 (ТЗ: 100000 итераций)
+            "pbkdf2_iterations": 100000,
+            # Автоблокировка (ТЗ: 60 минут)
+            "auto_lock_minutes": 60,
+            "lock_on_focus_loss": False,
+            # Политика паролей
+            "min_password_length": 12,
+            "require_upper": True,
+            "require_lower": True,
+            "require_digits": True,
+            "require_symbols": True,
+            # Безопасность
+            "clipboard_timeout_seconds": 30,
+            "max_login_attempts": 5,
+            "lockout_seconds": 30
+        }
 
     def save(self):
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump(self.data, f)
 
-    def get(self, key, default=None):
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(self.data, f, indent=2)
+        except Exception as e:
+            print(f"Ошибка сохранения конфига: {e}")
+
+    def get(self, key: str, default=None):
+
         return self.data.get(key, default)
 
-    def set(self, key, value):
+    def set(self, key: str, value):
+
         self.data[key] = value
         self.save()
+
+    def get_crypto_params(self) -> dict:
+
+        return {
+            'argon2_time': self.get('argon2_time', 3),
+            'argon2_memory': self.get('argon2_memory', 65536),
+            'argon2_parallelism': self.get('argon2_parallelism', 4),
+            'pbkdf2_iterations': self.get('pbkdf2_iterations', 100000),
+            'auto_lock_minutes': self.get('auto_lock_minutes', 60)
+        }
+
+    def set_crypto_params(self, **params):
+
+        for key, value in params.items():
+            if key in ['argon2_time', 'argon2_memory', 'argon2_parallelism', 'pbkdf2_iterations', 'auto_lock_minutes']:
+                self.data[key] = value
+        self.save()
+
+    def get_password_policy(self) -> dict:
+
+        return {
+            'min_length': self.get('min_password_length', 12),
+            'require_upper': self.get('require_upper', True),
+            'require_lower': self.get('require_lower', True),
+            'require_digits': self.get('require_digits', True),
+            'require_symbols': self.get('require_symbols', True)
+        }
+
 
 # Глобальный конфиг
 config = Config()

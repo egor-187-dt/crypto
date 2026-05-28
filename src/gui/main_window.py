@@ -1,367 +1,414 @@
+"""
+Main Window for CryptoSafe Manager - Updated for Sprint 2 with working lock
+"""
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from src.database.db import db
-from src.core.key_manager import KeyManager
+from tkinter import ttk, messagebox
+from datetime import datetime
+
+from src.core.config import config
+from src.core.events import events
 from src.core.state_manager import state
+from src.core.key_manager import KeyManager
 from src.core.crypto.authentication import Authenticator
 from src.core.crypto.key_derivation import KeyDerivation
-from src.core.crypto.key_storage import key_storage
-from src.gui.change_password_dialog import ChangePasswordDialog
-from src.core.events import events
 from src.core.vault.entry_manager import EntryManager
 from src.core.vault.password_generator import PasswordGenerator
 from src.gui.entry_dialog import EntryDialog
-import os
+from src.gui.change_password_dialog import ChangePasswordDialog
+from src.gui.login_dialog import LoginDialog
+from src.database.db import db
 
 
 class MainWindow:
     def __init__(self, root):
         self.root = root
-        self.root.title("CryptoSafe")
-        self.root.geometry("700x500")
+        self.root.title("CryptoSafe Manager")
+        self.root.geometry("900x600")
 
-        self.key_manager = KeyManager()
         self.kd = KeyDerivation()
+        self.key_manager = KeyManager()
         self.auth = Authenticator(self.kd)
         self.entry_manager = EntryManager(db, self.key_manager)
         self.password_gen = PasswordGenerator()
 
-        if db.conn is None:
-            db.connect()
+        self.last_activity = datetime.now()
+        self.auto_lock_id = None
+        self.auto_lock_minutes = config.get("auto_lock_timeout", 60)
+        self.is_locked_display = False
 
-        result = db.fetch_all("SELECT password_hash, salt FROM master_password LIMIT 1")
-        if not result:
-            messagebox.showerror("Ошибка", "Нет сохраненного пароля. Запустите настройку заново.")
-            self.root.quit()
-            return
+        self._setup_ui()
+        self._bind_events()
+        self._start_auto_lock_timer()
+        self._refresh_entries()
 
-        saved_hash, salt_value = result[0]
+        state.login()
+        state.update_activity()
 
-        if not self.show_login_dialog(saved_hash, salt_value):
-            self.root.quit()
-            return
+        events.publish("main_window_ready", {})
 
-        self._create_menu()
-        self._create_ui()
-        self.load_data()
-
-        events.subscribe("user_logged_out", self.on_logout)
-        self.check_auto_lock()
-
-    def show_login_dialog(self, stored_hash, salt_value):
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Вход в CryptoSafe")
-        dialog.geometry("400x200")
-        dialog.transient(self.root)
-        dialog.grab_set()
-
-        tk.Label(dialog, text="Введите мастер-пароль:", font=("Arial", 11)).pack(pady=10)
-
-        pass_entry = tk.Entry(dialog, show="*", width=30)
-        pass_entry.pack(pady=5)
-        pass_entry.focus()
-
-        status_label = tk.Label(dialog, text="", fg="red")
-        status_label.pack()
-
-        result = [False]
-
-        def try_login():
-            pwd = pass_entry.get()
-            if not pwd:
-                return
-
-            try:
-                salt = bytes.fromhex(salt_value)
-            except:
-                salt = b''
-
-            success = False
-            enc_key = None
-
-            try:
-                if stored_hash.startswith('$argon2'):
-                    success, enc_key = self.auth.login(pwd, stored_hash, salt)
-            except Exception as e:
-                print(f"Auth error: {e}")
-
-            if success and enc_key:
-                self.key_manager.store_key(enc_key)
-                state.login()
-                result[0] = True
-                dialog.destroy()
-            else:
-                self.auth.failed_attempts += 1
-                status_label.config(text=f"Неверный пароль (попытка {self.auth.failed_attempts})")
-                pass_entry.delete(0, tk.END)
-                pass_entry.focus()
-
-        def on_closing():
-            dialog.destroy()
-
-        dialog.protocol("WM_DELETE_WINDOW", on_closing)
-
-        tk.Button(dialog, text="Войти", command=try_login, bg="lightblue", width=15).pack(pady=10)
-        tk.Button(dialog, text="Отмена", command=on_closing, width=15).pack()
-
-        pass_entry.bind("<Return>", lambda e: try_login())
-
-        self.root.wait_window(dialog)
-        return result[0]
-
-    def check_auto_lock(self):
-        if key_storage.auto_lock_check():
-            self.lock_vault()
-        self.root.after(60000, self.check_auto_lock)
-
-    def lock_vault(self):
-        state.lock()
-        key_storage.clear_key()
-        messagebox.showinfo("Блокировка", "Хранилище заблокировано из-за неактивности")
-        self.show_login_dialog_after_lock()
-
-    def show_login_dialog_after_lock(self):
-        result = db.fetch_all("SELECT password_hash, salt FROM master_password LIMIT 1")
-        if result:
-            if self.show_login_dialog(result[0][0], result[0][1]):
-                state.unlock("")
-                self.load_data()
-
-    def on_logout(self, data):
-        self.key_manager.clear_key()
-        messagebox.showinfo("Выход", "Вы вышли из системы")
-        self.root.quit()
-
-    def _create_menu(self):
+    def _setup_ui(self):
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
         file_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Файл", menu=file_menu)
-        file_menu.add_command(label="Создать новую БД", command=self.create_new_db)
-        file_menu.add_command(label="Открыть другую БД", command=self.open_other_db)
-        file_menu.add_command(label="Показать где БД", command=self.show_db_location)
+        file_menu.add_command(label="Сменить мастер-пароль", command=self._change_master_password)
         file_menu.add_separator()
-        file_menu.add_command(label="Создать запись", command=self.add_entry)
-        file_menu.add_command(label="Открыть запись", command=self.edit_entry)
-        file_menu.add_separator()
-        file_menu.add_command(label="Выход", command=self.logout)
+        file_menu.add_command(label="Выйти", command=self._quit)
 
-        edit_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Правка", menu=edit_menu)
-        edit_menu.add_command(label="Добавить", command=self.add_entry)
-        edit_menu.add_command(label="Изменить", command=self.edit_entry)
-        edit_menu.add_command(label="Удалить", command=self.delete_entry)
-        edit_menu.add_command(label="Показать пароль", command=self.show_password)
-        edit_menu.add_separator()
-        edit_menu.add_command(label="Сменить пароль", command=self.change_password)
-
-        view_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Вид", menu=view_menu)
-        view_menu.add_command(label="Настройки", command=self.show_settings)
+        security_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Безопасность", menu=security_menu)
+        security_menu.add_command(label="Заблокировать", command=self._lock_vault)
+        security_menu.add_command(label="Выйти из системы", command=self._logout)
+        security_menu.add_separator()
+        security_menu.add_command(label="Настройки", command=self._show_settings)
 
         help_menu = tk.Menu(menubar, tearoff=0)
-        menubar.add_cascade(label="Справка", menu=help_menu)
-        help_menu.add_command(label="О программе", command=self.about)
+        menubar.add_cascade(label="Помощь", menu=help_menu)
+        help_menu.add_command(label="О программе", command=self._about)
 
-        file_menu.add_separator()
-        file_menu.add_command(label=f"Текущая: {os.path.basename(db.db_path)}", state="disabled")
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
 
-    def logout(self):
-        self.auth.logout()
-        self.key_manager.clear_key()
+        self.add_btn = ttk.Button(toolbar, text="Добавить", command=self._add_entry)
+        self.add_btn.pack(side=tk.LEFT, padx=2)
+
+        self.edit_btn = ttk.Button(toolbar, text="Редактировать", command=self._edit_entry)
+        self.edit_btn.pack(side=tk.LEFT, padx=2)
+
+        self.delete_btn = ttk.Button(toolbar, text="Удалить", command=self._delete_entry)
+        self.delete_btn.pack(side=tk.LEFT, padx=2)
+
+        self.lock_btn = ttk.Button(toolbar, text="Заблокировать", command=self._lock_vault)
+        self.lock_btn.pack(side=tk.LEFT, padx=2)
+
+        self.status_bar = ttk.Label(
+            self.root,
+            text="Готов | Статус: разблокировано",
+            relief=tk.SUNKEN,
+            anchor=tk.W
+        )
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        search_frame = ttk.Frame(self.root)
+        search_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 5))
+
+        ttk.Label(search_frame, text="Поиск:").pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', lambda *args: self._search_entries())
+        self.search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
+        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 0))
+
+        self.tree_frame = ttk.Frame(self.root)
+        self.tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        columns = ("ID", "Название", "Логин", "URL", "Обновлено")
+        self.tree = ttk.Treeview(
+            self.tree_frame,
+            columns=columns,
+            show="headings",
+            selectmode="browse"
+        )
+
+        self.tree.heading("ID", text="ID")
+        self.tree.heading("Название", text="Название")
+        self.tree.heading("Логин", text="Логин")
+        self.tree.heading("URL", text="URL")
+        self.tree.heading("Обновлено", text="Обновлено")
+
+        self.tree.column("ID", width=50)
+        self.tree.column("Название", width=200)
+        self.tree.column("Логин", width=150)
+        self.tree.column("URL", width=200)
+        self.tree.column("Обновлено", width=150)
+
+        scrollbar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.tree.bind('<Double-Button-1>', lambda e: self._edit_entry())
+        self.tree.bind('<Delete>', lambda e: self._delete_entry())
+
+        self.root.bind('<Any-KeyPress>', self._on_activity)
+        self.root.bind('<Any-ButtonPress>', self._on_activity)
+
+    def _bind_events(self):
+        events.subscribe("entry_created", lambda data: self._refresh_entries())
+        events.subscribe("entry_updated", lambda data: self._refresh_entries())
+        events.subscribe("entry_deleted", lambda data: self._refresh_entries())
+        events.subscribe("user_logged_out", lambda data: self._on_logout())
+        events.subscribe("vault_locked", lambda data: self._on_vault_locked())
+        events.subscribe("vault_unlocked", lambda data: self._on_vault_unlocked())
+
+    def _on_activity(self, event=None):
+        if not self.is_locked_display and state.is_logged_in:
+            self.last_activity = datetime.now()
+            state.update_activity()
+            self.auth.update_activity()
+            self._reset_auto_lock_timer()
+
+    def _start_auto_lock_timer(self):
+        self._check_auto_lock()
+
+    def _reset_auto_lock_timer(self):
+        if self.auto_lock_id:
+            self.root.after_cancel(self.auto_lock_id)
+        self._check_auto_lock()
+
+    def _check_auto_lock(self):
+        if state.is_inactive(self.auto_lock_minutes) and not self.is_locked_display and state.is_logged_in:
+            self._lock_vault()
+        else:
+            self.auto_lock_id = self.root.after(60000, self._check_auto_lock)
+
+    def _lock_vault(self):
+        if state.is_logged_in and not self.is_locked_display:
+            state.lock()
+            self.is_locked_display = True
+            self.key_manager.clear_key()
+            self._clear_entries_display()
+
+            self.add_btn.config(state='disabled')
+            self.edit_btn.config(state='disabled')
+            self.delete_btn.config(state='disabled')
+            self.search_entry.config(state='disabled')
+            self.tree.config(cursor="arrow")
+
+            self.status_bar.config(text="Статус: ЗАБЛОКИРОВАНО - нажмите Разблокировать для входа")
+
+            self.lock_btn.config(text="Разблокировать", command=self._unlock_vault)
+
+            events.publish("vault_locked", {"timestamp": datetime.now().isoformat()})
+
+    def _unlock_vault(self):
+        def on_unlock_success():
+            state.unlock()
+            self.is_locked_display = False
+            self.key_manager.load_key()
+            self._refresh_entries()
+
+            self.add_btn.config(state='normal')
+            self.edit_btn.config(state='normal')
+            self.delete_btn.config(state='normal')
+            self.search_entry.config(state='normal')
+
+            self.status_bar.config(text="Готов | Статус: разблокировано")
+
+            self.lock_btn.config(text="Заблокировать", command=self._lock_vault)
+
+            events.publish("vault_unlocked", {"timestamp": datetime.now().isoformat()})
+
+        LoginDialog(self.root, on_unlock_success, is_relogin=True)
+
+    def _clear_entries_display(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+    def _on_vault_locked(self):
+        if not self.is_locked_display:
+            self._lock_vault()
+
+    def _on_vault_unlocked(self):
+        pass
+
+    def _on_logout(self):
+        self._clear_entries_display()
         state.logout()
-        events.publish("user_logged_out", {})
-        self.root.quit()
+        self.key_manager.clear_key()
+        self.status_bar.config(text="Статус: ВЫ ВЫШЛИ - перезапустите приложение")
 
-    def change_password(self):
-        ChangePasswordDialog(self.root, self.key_manager, self.kd, self.auth)
+        self.add_btn.config(state='disabled')
+        self.edit_btn.config(state='disabled')
+        self.delete_btn.config(state='disabled')
+        self.lock_btn.config(state='disabled')
+        self.search_entry.config(state='disabled')
 
-    def _create_ui(self):
-        search_frame = tk.Frame(self.root)
-        search_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        tk.Label(search_frame, text="🔍 Поиск:").pack(side=tk.LEFT)
-        self.search_entry = tk.Entry(search_frame)
-        self.search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        self.search_entry.bind('<KeyRelease>', self.on_search)
-
-        btn_frame = tk.Frame(self.root)
-        btn_frame.pack(pady=10)
-
-        tk.Button(btn_frame, text="Добавить", command=self.add_entry).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Изменить", command=self.edit_entry).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Удалить", command=self.delete_entry).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Показать пароль", command=self.show_password).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Обновить", command=self.load_data).pack(side=tk.LEFT, padx=5)
-
-        columns = ("ID", "Название", "Логин", "URL")
-        self.table = ttk.Treeview(self.root, columns=columns, show="headings")
-
-        self.table.heading("ID", text="ID")
-        self.table.column("ID", width=80)
-
-        for col in columns[1:]:
-            self.table.heading(col, text=col)
-            self.table.column(col, width=180)
-
-        self.table.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        self.table.bind("<Double-1>", lambda e: self.show_password())
-
-        status_frame = tk.Frame(self.root)
-        status_frame.pack(fill=tk.X)
-
-        self.status = tk.Label(status_frame, text="Готов", bd=1, relief=tk.SUNKEN, anchor=tk.W)
-        self.status.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        self.clipboard_label = tk.Label(status_frame, text="⏱️ Буфер: 30с", bd=1, relief=tk.SUNKEN, width=15)
-        self.clipboard_label.pack(side=tk.RIGHT)
-
-    def show_db_location(self):
-        db_path = db.db_path
-        db_folder = os.path.dirname(db_path)
-        db_file = os.path.basename(db_path)
-        messagebox.showinfo("Расположение БД", f"Файл: {db_file}\nПапка: {db_folder}\n\nПолный путь:\n{db_path}")
-
-    def create_new_db(self):
-        result = messagebox.askyesno("Создать новую БД", "Будет создан новый файл базы данных.\nПродолжить?")
-        if not result:
+    def _refresh_entries(self):
+        if self.is_locked_display:
             return
 
-        filename = filedialog.asksaveasfilename(
-            title="Создать новую базу данных",
-            defaultextension=".db",
-            filetypes=[("SQLite DB", "*.db"), ("Все файлы", "*.*")]
-        )
-        if not filename:
-            return
+        for item in self.tree.get_children():
+            self.tree.delete(item)
 
-        db.close()
-        from src.core.config import config
-        config.set("db_path", filename)
-
-        messagebox.showinfo("Новая БД", "Файл создан. Программа перезапустится.")
-        self.root.quit()
-        import main
-        main.main()
-
-    def open_other_db(self):
-        filename = filedialog.askopenfilename(
-            title="Выберите файл базы данных",
-            filetypes=[("SQLite DB", "*.db"), ("Все файлы", "*.*")]
-        )
-        if not filename:
-            return
-
-        db.close()
-        from src.core.config import config
-        config.set("db_path", filename)
-
-        messagebox.showinfo("Открыть БД", f"Переключение на {os.path.basename(filename)}.")
-        self.root.quit()
-        import main
-        main.main()
-
-    def backup(self):
-        messagebox.showinfo("Резервная копия", "Функция будет позже")
-
-    def show_settings(self):
-        from src.gui.settings_dialog import SettingsDialog
-        SettingsDialog(self.root)
-
-    def about(self):
-        messagebox.showinfo("О программе", "CryptoSafe Manager\nВерсия 3.0\nAES-256-GCM шифрование")
-
-    def load_data(self):
         try:
             entries = self.entry_manager.get_all_entries()
-            self.refresh_table(entries)
+            for entry in entries:
+                self.tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        entry.get('id', '')[:8],
+                        entry.get('title', ''),
+                        entry.get('username', ''),
+                        entry.get('url', '')[:50],
+                        entry.get('updated_at', '')[:19]
+                    ),
+                    tags=(entry.get('id', ''),)
+                )
+
+            self.status_bar.config(text=f"Загружено записей: {len(entries)} | Статус: разблокировано")
         except Exception as e:
-            self.status.config(text=f"Ошибка: {e}")
+            self.status_bar.config(text=f"Ошибка загрузки: {str(e)}")
 
-    def refresh_table(self, entries):
-        for row in self.table.get_children():
-            self.table.delete(row)
+    def _search_entries(self):
+        if self.is_locked_display:
+            return
 
-        for e in entries:
-            username = e.get('username', '')
-            if len(username) > 12:
-                username = username[:6] + '...'
-            self.table.insert("", "end", values=(
-                e.get('id', '')[:8],
-                e.get('title', ''),
-                username,
-                e.get('url', '')
-            ))
-        self.status.config(text=f"Записей: {len(entries)} | БД: {os.path.basename(db.db_path)}")
+        query = self.search_var.get()
+        if not query:
+            self._refresh_entries()
+            return
 
-    def add_entry(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        try:
+            entries = self.entry_manager.search(query)
+            for entry in entries:
+                self.tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        entry.get('id', '')[:8],
+                        entry.get('title', ''),
+                        entry.get('username', ''),
+                        entry.get('url', '')[:50],
+                        entry.get('updated_at', '')[:19]
+                    )
+                )
+
+            self.status_bar.config(text=f"Найдено: {len(entries)} записей")
+        except Exception as e:
+            self.status_bar.config(text=f"Ошибка поиска: {str(e)}")
+
+    def _add_entry(self):
+        if self.is_locked_display:
+            messagebox.showwarning("Внимание", "Хранилище заблокировано")
+            return
+
         dialog = EntryDialog(self.root, self.password_gen)
         if dialog.result:
             try:
-                self.entry_manager.create_entry(dialog.result)
-                self.load_data()
-                messagebox.showinfo("Готово", "Запись добавлена")
+                entry_id = self.entry_manager.create_entry(dialog.result)
+                self._refresh_entries()
+                self.status_bar.config(text=f"Запись создана (ID: {entry_id})")
             except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось добавить: {e}")
+                messagebox.showerror("Ошибка", f"Не удалось создать запись: {str(e)}")
 
-    def edit_entry(self):
-        selected = self.table.selection()
-        if not selected:
-            messagebox.showwarning("Упс", "Сначала выбери запись")
+    def _edit_entry(self):
+        if self.is_locked_display:
+            messagebox.showwarning("Внимание", "Хранилище заблокировано")
             return
 
-        item = self.table.item(selected[0])
-        entry_id = item['values'][0]
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Внимание", "Выберите запись для редактирования")
+            return
+
+        item = self.tree.item(selection[0])
+        entry_id = item['values'][0] if item['values'] else None
+
+        if not entry_id:
+            return
 
         try:
             entry = self.entry_manager.get_entry(entry_id)
             dialog = EntryDialog(self.root, self.password_gen, entry)
             if dialog.result:
                 self.entry_manager.update_entry(entry_id, dialog.result)
-                self.load_data()
-                messagebox.showinfo("Готово", "Запись обновлена")
+                self._refresh_entries()
+                self.status_bar.config(text="Запись обновлена")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось редактировать: {e}")
+            messagebox.showerror("Ошибка", f"Не удалось загрузить запись: {str(e)}")
 
-    def delete_entry(self):
-        selected = self.table.selection()
-        if not selected:
-            messagebox.showwarning("Упс", "Сначала выбери запись")
+    def _delete_entry(self):
+        if self.is_locked_display:
+            messagebox.showwarning("Внимание", "Хранилище заблокировано")
             return
 
-        item = self.table.item(selected[0])
-        entry_id = item['values'][0]
-        entry_name = item['values'][1]
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Внимание", "Выберите запись для удаления")
+            return
 
-        if messagebox.askyesno("Подтверждение", f"Точно удалить '{entry_name}'?"):
+        if not messagebox.askyesno("Подтверждение", "Удалить выбранную запись?"):
+            return
+
+        item = self.tree.item(selection[0])
+        entry_id = item['values'][0] if item['values'] else None
+
+        if entry_id:
             try:
                 self.entry_manager.delete_entry(entry_id)
-                self.load_data()
-                messagebox.showinfo("Готово", "Запись удалена")
+                self._refresh_entries()
+                self.status_bar.config(text="Запись удалена")
             except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось удалить: {e}")
+                messagebox.showerror("Ошибка", f"Не удалось удалить запись: {str(e)}")
 
-    def show_password(self):
-        selected = self.table.selection()
-        if not selected:
-            messagebox.showwarning("Упс", "Сначала выбери запись")
+    def _change_master_password(self):
+        if self.is_locked_display:
+            messagebox.showwarning("Внимание", "Хранилище заблокировано")
             return
 
-        item = self.table.item(selected[0])
-        entry_id = item['values'][0]
+        if not self.key_manager.load_key():
+            messagebox.showwarning("Внимание", "Необходимо войти в систему")
+            return
 
-        try:
-            entry = self.entry_manager.get_entry(entry_id)
-            messagebox.showinfo(f"Пароль для {entry['title']}",
-                               f"Логин: {entry['username']}\nПароль: {entry['password']}")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось расшифровать: {e}")
+        dialog = ChangePasswordDialog(
+            self.root,
+            db,
+            self.entry_manager,
+            self.key_manager,
+            self.auth
+        )
 
-    def on_search(self, event=None):
-        query = self.search_entry.get()
-        if query:
-            results = self.entry_manager.search(query)
-            self.refresh_table(results)
-        else:
-            self.load_data()
+        if dialog.result:
+            self.status_bar.config(text="Пароль успешно изменен")
+
+    def _logout(self):
+        if messagebox.askyesno("Подтверждение", "Выйти из системы? Все несохраненные данные будут сохранены."):
+            self._clear_entries_display()
+            self.auth.logout()
+            self.key_manager.clear_key()
+            state.logout()
+            self.status_bar.config(text="Статус: ВЫ ВЫШЛИ - перезапустите приложение")
+
+            self.add_btn.config(state='disabled')
+            self.edit_btn.config(state='disabled')
+            self.delete_btn.config(state='disabled')
+            self.lock_btn.config(state='disabled')
+            self.search_entry.config(state='disabled')
+
+            events.publish("user_logged_out", {})
+
+    def _show_settings(self):
+        if self.is_locked_display:
+            messagebox.showwarning("Внимание", "Хранилище заблокировано")
+            return
+
+        from src.gui.settings_dialog import SettingsDialog
+        SettingsDialog(self.root)
+
+    def _about(self):
+        about_text = """CryptoSafe Manager - Безопасный менеджер паролей
+
+Версия: 1.0.0 (Sprint 2)
+Криптография: AES-256-GCM, Argon2id, PBKDF2
+
+Особенности:
+- Безопасное хранение паролей
+- Автоматическая блокировка при неактивности
+- Защита от brute-force атак
+- Генерация надежных паролей
+
+2025 CryptoSafe Team"""
+
+        messagebox.showinfo("О программе", about_text)
+
+    def _quit(self):
+        if messagebox.askokcancel("Выход", "Выйти из приложения?"):
+            self.key_manager.clear_key()
+            self.root.quit()
+            self.root.destroy()
