@@ -10,25 +10,34 @@ class TestDBFixture:
         self.db_path = os.path.join(self.temp_dir, "test.db")
 
     def create_test_db(self):
-        """Создает БД с тестовыми данными"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Создаем таблицы
         cursor.execute('''
             CREATE TABLE vault_entries (
-                id INTEGER PRIMARY KEY,
+                id TEXT PRIMARY KEY,
                 title TEXT,
                 username TEXT,
-                encrypted_password TEXT
+                encrypted_password TEXT,
+                encrypted_data BLOB,
+                url TEXT,
+                notes TEXT,
+                tags TEXT,
+                created_at TIMESTAMP,
+                updated_at TIMESTAMP,
+                deleted INTEGER DEFAULT 0,
+                deleted_at TIMESTAMP
             )
         ''')
 
-        # Добавляем тестовые данные
         cursor.execute('''
-            INSERT INTO vault_entries (title, username, encrypted_password)
-            VALUES (?, ?, ?)
-        ''', ("test", "user", b"encrypted"))
+            CREATE TABLE master_password (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                password_hash TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 
         conn.commit()
         conn.close()

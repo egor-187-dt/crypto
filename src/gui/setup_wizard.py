@@ -1,6 +1,5 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import os
 
 from src.core.crypto.key_derivation import KeyDerivation
 from src.core.crypto.password_validator import PasswordValidator
@@ -16,6 +15,8 @@ class SetupWizard:
         self.on_complete = on_complete
         self.kd = KeyDerivation()
         self.validator = PasswordValidator(min_length=12)
+        self.password = ""
+        self.is_finishing = False
 
         self.wizard = tk.Toplevel(parent)
         self.wizard.title("CryptoSafe Manager - Первый запуск")
@@ -37,7 +38,9 @@ class SetupWizard:
 
         self.wizard.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.wizard.wait_window()
+        self.wizard.deiconify()
+        self.wizard.lift()
+        self.wizard.focus_force()
 
     def _create_ui(self):
         self.main_frame = ttk.Frame(self.wizard, padding="20")
@@ -76,6 +79,21 @@ class SetupWizard:
         self.steps[self.current_step]()
 
     def _next_step(self):
+        if self.current_step == 1:
+            if not hasattr(self, 'password_entry'):
+                return
+            password = self.password_entry.get()
+            confirm = self.confirm_entry.get()
+
+            if not password or password != confirm:
+                return
+
+            is_valid, _ = self.validator.validate(password)
+            if not is_valid:
+                return
+
+            self.password = password
+
         if self.current_step < len(self.steps) - 1:
             self.current_step += 1
             self._update_buttons()
@@ -91,9 +109,9 @@ class SetupWizard:
         self.prev_btn.config(state='normal' if self.current_step > 0 else 'disabled')
 
         if self.current_step == len(self.steps) - 1:
-            self.next_btn.config(text="Завершить")
+            self.next_btn.config(text="Завершить", command=self._finish_setup)
         else:
-            self.next_btn.config(text="Далее")
+            self.next_btn.config(text="Далее", command=self._next_step)
 
     def _step_welcome(self):
         self.step_label.config(text="Шаг 1 из 3: Добро пожаловать")
@@ -204,12 +222,12 @@ class SetupWizard:
         complete_frame = ttk.Frame(self.content_frame)
         complete_frame.pack(fill=tk.BOTH, expand=True)
 
-        status_label = ttk.Label(
+        self.status_label = ttk.Label(
             complete_frame,
             text="Настройка хранилища...",
             font=("Arial", 10)
         )
-        status_label.pack(pady=20)
+        self.status_label.pack(pady=20)
 
         self.progress_bar = ttk.Progressbar(
             complete_frame,
@@ -221,15 +239,17 @@ class SetupWizard:
 
         self.wizard.update()
 
-        self.wizard.after(100, lambda: self._finish_setup(status_label))
+        self.wizard.after(100, self._do_finish_setup)
 
-    def _finish_setup(self, status_label):
+    def _do_finish_setup(self):
+        if self.is_finishing:
+            return
+        self.is_finishing = True
+
         try:
-            password = self.password_entry.get()
             salt = self.kd.create_salt()
-
-            auth_hash = self.kd.create_auth_hash(password)
-            enc_key = self.kd.derive_encryption_key(password, salt)
+            auth_hash = self.kd.create_auth_hash(self.password)
+            enc_key = self.kd.derive_encryption_key(self.password, salt)
 
             key_manager = KeyManager()
             key_manager.store_key(enc_key)
@@ -241,20 +261,47 @@ class SetupWizard:
             )
 
             config.set("first_run_complete", True)
-            config.set("encryption_method", "AES-256")
+            config.set("encryption_method", "AES-256-GCM")
 
-            status_label.config(text="Настройка успешно завершена!", foreground="green")
-            self.progress_bar.stop()
-            self.progress_bar.destroy()
+            self.status_label.config(text="Настройка успешно завершена!", foreground="green")
+            if hasattr(self, 'progress_bar'):
+                self.progress_bar.stop()
+                self.progress_bar.destroy()
 
             events.publish("setup_complete", {})
 
             self.wizard.after(1500, self._complete_wizard)
 
         except Exception as e:
-            status_label.config(text=f"Ошибка: {str(e)}", foreground="red")
-            self.next_btn.config(state='normal', text="Повторить")
-            self.next_btn.config(command=lambda: self._finish_setup(status_label))
+            self.status_label.config(text=f"Ошибка: {str(e)}", foreground="red")
+            if hasattr(self, 'progress_bar'):
+                self.progress_bar.stop()
+                self.progress_bar.destroy()
+
+            self.retry_btn = ttk.Button(
+                self.content_frame,
+                text="Повторить",
+                command=self._retry_finish
+            )
+            self.retry_btn.pack(pady=10)
+            self.is_finishing = False
+
+    def _retry_finish(self):
+        if hasattr(self, 'retry_btn'):
+            self.retry_btn.destroy()
+        self.status_label.config(text="Настройка хранилища...", foreground="black")
+        self.progress_bar = ttk.Progressbar(
+            self.content_frame,
+            mode='indeterminate',
+            length=400
+        )
+        self.progress_bar.pack(pady=20)
+        self.progress_bar.start(10)
+        self.is_finishing = False
+        self.wizard.after(100, self._do_finish_setup)
+
+    def _finish_setup(self):
+        self._step_complete()
 
     def _complete_wizard(self):
         self.wizard.destroy()

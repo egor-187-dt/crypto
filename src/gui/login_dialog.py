@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 import time
 
 from src.core.events import events
@@ -17,6 +17,7 @@ class LoginDialog:
         self.kd = KeyDerivation()
         self.auth = Authenticator(self.kd)
         self.key_manager = KeyManager()
+        self.result = False
 
         self.dialog = tk.Toplevel(parent)
 
@@ -41,7 +42,6 @@ class LoginDialog:
         self._create_ui()
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
-
         self.dialog.wait_window()
 
     def _create_ui(self):
@@ -110,7 +110,6 @@ class LoginDialog:
         cancel_btn.pack(side=tk.RIGHT)
 
         self.password_entry.bind('<Return>', lambda e: self._do_login())
-
         self.password_entry.focus()
 
     def _toggle_password(self, show):
@@ -154,11 +153,9 @@ class LoginDialog:
 
             if success and enc_key:
                 self.key_manager.store_key(enc_key)
-
                 events.publish("user_logged_in", {"method": "master_password", "relogin": self.is_relogin})
-
+                self.result = True
                 self.dialog.destroy()
-
                 if self.on_success:
                     self.on_success()
             else:
@@ -183,5 +180,5 @@ class LoginDialog:
 
     def _on_close(self):
         self.dialog.destroy()
-        if not self.is_relogin:
+        if not self.is_relogin and not self.result:
             self.parent.quit()

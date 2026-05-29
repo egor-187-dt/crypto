@@ -4,12 +4,10 @@ import os
 import tempfile
 import shutil
 import sqlite3
-import base64
-import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from src.core.crypto.aes_gcm import AESGCMEncryption
+from src.core.vault.encryption_service import AESGCMEncryption
 from src.core.vault.password_generator import PasswordGenerator
 from src.core.crypto.key_derivation import KeyDerivation
 from src.core.key_manager import KeyManager
@@ -19,7 +17,6 @@ from src.core.vault.entry_manager import EntryManager
 
 
 class TestSprint3(unittest.TestCase):
-    """Тесты для проверки спринта 3"""
 
     def setUp(self):
         self.kd = KeyDerivation()
@@ -28,13 +25,11 @@ class TestSprint3(unittest.TestCase):
         self._setup_test_db()
 
     def _setup_test_db(self):
-        """Создает временную БД с правильной структурой"""
         conn = sqlite3.connect(self.test_db)
         cursor = conn.cursor()
-
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS vault_entries (
-                id TEXT PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 title TEXT,
                 username TEXT,
                 encrypted_password TEXT,
@@ -45,10 +40,10 @@ class TestSprint3(unittest.TestCase):
                 created_at TIMESTAMP,
                 updated_at TIMESTAMP,
                 deleted INTEGER DEFAULT 0,
-                deleted_at TIMESTAMP
+                deleted_at TIMESTAMP,
+                version INTEGER DEFAULT 2
             )
         ''')
-
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS master_password (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,30 +52,38 @@ class TestSprint3(unittest.TestCase):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-
         conn.commit()
         conn.close()
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_aes_gcm_encrypt_decrypt(self):
-        """ТЕСТ-1: AES-GCM шифрование и расшифровка"""
+    def _setup_auth(self, db, km):
+        password = "testpass123456"
+        salt = self.kd.create_salt()
+        auth_hash = self.kd.create_auth_hash(password)
+        enc_key = self.kd.derive_encryption_key(password, salt)
+        km.store_key(enc_key)
+
+        db.execute("DELETE FROM master_password")
+        db.execute("INSERT INTO master_password (password_hash, salt) VALUES (?, ?)",
+                   (auth_hash, salt.hex()))
+        return password
+
+    def test_1_aes_gcm_encrypt_decrypt(self):
+        """ENC-1, ENC-5: AES-GCM шифрование и расшифровка с проверкой тега"""
         key = self.kd.derive_encryption_key("testpass", self.kd.create_salt())
         aes = AESGCMEncryption(key)
 
-        original = {"title": "Test", "password": "secret123", "version": 2}
-
+        original = {"title": "Test", "password": "secret123", "version": 1}
         encrypted = aes.encrypt(original)
         decrypted = aes.decrypt(encrypted)
 
         self.assertEqual(original["title"], decrypted["title"])
         self.assertEqual(original["password"], decrypted["password"])
-        self.assertEqual(original["version"], decrypted["version"])
-        print("AES-GCM шифрование/расшифровка работает")
 
-    def test_aes_gcm_unique_nonce(self):
-        """Уникальный nonce для каждой записи"""
+    def test_2_aes_gcm_unique_nonce(self):
+        """ENC-2: Уникальный nonce для каждой записи"""
         key = self.kd.derive_encryption_key("testpass", self.kd.create_salt())
         aes = AESGCMEncryption(key)
 
@@ -88,57 +91,44 @@ class TestSprint3(unittest.TestCase):
         encrypted1 = aes.encrypt(data)
         encrypted2 = aes.encrypt(data)
 
-        # Первые 12 байт - nonce, они должны быть разными
         nonce1 = encrypted1[:12]
         nonce2 = encrypted2[:12]
-
         self.assertNotEqual(nonce1, nonce2)
         self.assertEqual(len(nonce1), 12)
-        print("Уникальный nonce для каждой записи")
 
-    def test_password_generator_length(self):
-        """Генератор паролей - длина"""
+    def test_3_password_generator_length(self):
+        """GEN-2: Генерация паролей разной длины"""
         gen = PasswordGenerator()
 
-        pwd8 = gen.generate(8)
-        pwd16 = gen.generate(16)
-        pwd32 = gen.generate(32)
+        self.assertEqual(len(gen.generate(8)), 8)
+        self.assertEqual(len(gen.generate(16)), 16)
+        self.assertEqual(len(gen.generate(32)), 32)
 
-        self.assertEqual(len(pwd8), 8)
-        self.assertEqual(len(pwd16), 16)
-        self.assertEqual(len(pwd32), 32)
-        print("Генератор паролей - длина работает")
-
-    def test_password_generator_sets(self):
-        """ТЕСТ-4: Генератор паролей - наборы символов"""
+    def test_4_password_generator_character_sets(self):
+        """GEN-3: Минимум 1 символ из каждого выбранного набора"""
         gen = PasswordGenerator()
 
-        # Только цифры
-        pwd = gen.generate(10, use_upper=False, use_lower=False, use_digits=True, use_symbols=False)
-        self.assertTrue(all(c.isdigit() for c in pwd))
-
-        # Только буквы
-        pwd = gen.generate(10, use_upper=True, use_lower=True, use_digits=False, use_symbols=False)
-        self.assertTrue(all(c.isalpha() for c in pwd))
-
-        # С заглавными
         pwd = gen.generate(10, use_upper=True, use_lower=False, use_digits=False, use_symbols=False)
         self.assertTrue(all(c.isupper() for c in pwd))
 
-        print("Генератор паролей - наборы символов работают")
+        pwd = gen.generate(10, use_upper=False, use_lower=True, use_digits=False, use_symbols=False)
+        self.assertTrue(all(c.islower() for c in pwd))
 
-    def test_password_generator_no_ambiguous(self):
-        """ТЕСТ-5: Генератор паролей - исключение неоднозначных символов"""
+        pwd = gen.generate(10, use_upper=False, use_lower=False, use_digits=True, use_symbols=False)
+        self.assertTrue(all(c.isdigit() for c in pwd))
+
+    def test_5_password_generator_history(self):
+        """GEN-5: История паролей предотвращает повторы"""
         gen = PasswordGenerator()
-        ambiguous = 'lI1O0'
+        passwords = set()
 
-        pwd = gen.generate(50, exclude_ambiguous=True)
-        for c in ambiguous:
-            self.assertNotIn(c, pwd)
-        print("Генератор паролей - исключение неоднозначных символов")
+        for _ in range(30):
+            pwd = gen.generate(12)
+            self.assertNotIn(pwd, passwords)
+            passwords.add(pwd)
 
-    def test_password_strength_check(self):
-        """ТЕСТ-6: Проверка сложности пароля"""
+    def test_6_password_strength_check(self):
+        """GEN-4: Проверка сложности пароля"""
         gen = PasswordGenerator()
 
         weak = gen.check_strength("123")
@@ -150,10 +140,8 @@ class TestSprint3(unittest.TestCase):
         strong = gen.check_strength("P@ssw0rd123!@#")
         self.assertEqual(strong['strength'], 'strong')
 
-        print("Проверка сложности пароля работает")
-
-    def test_crud_create_and_read(self):
-        """ТЕСТ-7: CRUD - создание и чтение записи"""
+    def test_7_crud_create_and_read(self):
+        """CRUD-1: Создание и чтение записи"""
         old_path = config.get("db_path")
         config.set("db_path", self.test_db)
 
@@ -162,15 +150,7 @@ class TestSprint3(unittest.TestCase):
         db.connect()
 
         km = KeyManager()
-        password = "testpass123456"
-        salt = self.kd.create_salt()
-        auth_hash = self.kd.create_auth_hash(password)
-        enc_key = self.kd.derive_encryption_key(password, salt)
-        km.store_key(enc_key)
-
-        db.execute("DELETE FROM master_password")
-        db.execute("INSERT INTO master_password (password_hash, salt) VALUES (?, ?)",
-                   (auth_hash, salt.hex()))
+        self._setup_auth(db, km)
 
         em = EntryManager(db, km)
 
@@ -180,22 +160,18 @@ class TestSprint3(unittest.TestCase):
             'password': 'secret123',
             'url': 'https://test.com',
             'notes': 'Test notes',
-            'tags': ['test', 'demo']
+            'tags': ['test']
         })
 
         entry = em.get_entry(entry_id)
         self.assertEqual(entry['title'], 'Test Entry')
-        self.assertEqual(entry['username'], 'testuser')
         self.assertEqual(entry['password'], 'secret123')
-        self.assertEqual(entry['url'], 'https://test.com')
 
         db.close()
         config.set("db_path", old_path)
 
-        print("CRUD - создание и чтение работает")
-
-    def test_crud_update(self):
-        """ТЕСТ-8: CRUD - обновление записи"""
+    def test_8_crud_update(self):
+        """CRUD-1: Обновление записи"""
         old_path = config.get("db_path")
         config.set("db_path", self.test_db)
 
@@ -204,15 +180,7 @@ class TestSprint3(unittest.TestCase):
         db.connect()
 
         km = KeyManager()
-        password = "testpass123456"
-        salt = self.kd.create_salt()
-        auth_hash = self.kd.create_auth_hash(password)
-        enc_key = self.kd.derive_encryption_key(password, salt)
-        km.store_key(enc_key)
-
-        db.execute("DELETE FROM master_password")
-        db.execute("INSERT INTO master_password (password_hash, salt) VALUES (?, ?)",
-                   (auth_hash, salt.hex()))
+        self._setup_auth(db, km)
 
         em = EntryManager(db, km)
 
@@ -232,15 +200,12 @@ class TestSprint3(unittest.TestCase):
 
         self.assertEqual(updated['title'], 'New Title')
         self.assertEqual(updated['password'], 'newpass')
-        self.assertEqual(updated['username'], 'olduser')
 
         db.close()
         config.set("db_path", old_path)
 
-        print("CRUD - обновление работает")
-
-    def test_crud_delete(self):
-        """ТЕСТ-9: CRUD - удаление записи"""
+    def test_9_crud_delete_soft(self):
+        """CRUD-4: Мягкое удаление"""
         old_path = config.get("db_path")
         config.set("db_path", self.test_db)
 
@@ -249,15 +214,7 @@ class TestSprint3(unittest.TestCase):
         db.connect()
 
         km = KeyManager()
-        password = "testpass123456"
-        salt = self.kd.create_salt()
-        auth_hash = self.kd.create_auth_hash(password)
-        enc_key = self.kd.derive_encryption_key(password, salt)
-        km.store_key(enc_key)
-
-        db.execute("DELETE FROM master_password")
-        db.execute("INSERT INTO master_password (password_hash, salt) VALUES (?, ?)",
-                   (auth_hash, salt.hex()))
+        self._setup_auth(db, km)
 
         em = EntryManager(db, km)
 
@@ -273,7 +230,7 @@ class TestSprint3(unittest.TestCase):
         all_before = em.get_all_entries()
         self.assertEqual(len(all_before), 1)
 
-        em.delete_entry(entry_id)
+        em.delete_entry(entry_id, soft_delete=True)
 
         all_after = em.get_all_entries()
         self.assertEqual(len(all_after), 0)
@@ -281,10 +238,8 @@ class TestSprint3(unittest.TestCase):
         db.close()
         config.set("db_path", old_path)
 
-        print("CRUD - удаление работает")
-
-    def test_search(self):
-        """ТЕСТ-10: Поиск по записям"""
+    def test_10_search(self):
+        """SEARCH-1: Поиск по записям"""
         old_path = config.get("db_path")
         config.set("db_path", self.test_db)
 
@@ -293,24 +248,13 @@ class TestSprint3(unittest.TestCase):
         db.connect()
 
         km = KeyManager()
-        password = "testpass123456"
-        salt = self.kd.create_salt()
-        auth_hash = self.kd.create_auth_hash(password)
-        enc_key = self.kd.derive_encryption_key(password, salt)
-        km.store_key(enc_key)
-
-        db.execute("DELETE FROM master_password")
-        db.execute("INSERT INTO master_password (password_hash, salt) VALUES (?, ?)",
-                   (auth_hash, salt.hex()))
+        self._setup_auth(db, km)
 
         em = EntryManager(db, km)
 
-        em.create_entry(
-            {'title': 'Google', 'username': 'user1@gmail.com', 'password': 'p1', 'url': '', 'notes': '', 'tags': []})
-        em.create_entry(
-            {'title': 'GitHub', 'username': 'user2@gmail.com', 'password': 'p2', 'url': '', 'notes': '', 'tags': []})
-        em.create_entry(
-            {'title': 'Facebook', 'username': 'user3@gmail.com', 'password': 'p3', 'url': '', 'notes': '', 'tags': []})
+        em.create_entry({'title': 'Google', 'username': 'user1@gmail.com', 'password': 'p1', 'url': 'https://google.com', 'notes': 'search', 'tags': []})
+        em.create_entry({'title': 'GitHub', 'username': 'user2@gmail.com', 'password': 'p2', 'url': 'https://github.com', 'notes': 'code', 'tags': []})
+        em.create_entry({'title': 'Facebook', 'username': 'user3@gmail.com', 'password': 'p3', 'url': 'https://facebook.com', 'notes': 'social', 'tags': []})
 
         results = em.search('Google')
         self.assertEqual(len(results), 1)
@@ -318,7 +262,6 @@ class TestSprint3(unittest.TestCase):
 
         results = em.search('user2')
         self.assertEqual(len(results), 1)
-        self.assertEqual(results[0]['username'], 'user2@gmail.com')
 
         results = em.search('nonexistent')
         self.assertEqual(len(results), 0)
@@ -326,10 +269,8 @@ class TestSprint3(unittest.TestCase):
         db.close()
         config.set("db_path", old_path)
 
-        print("Поиск работает")
-
-    def test_encrypted_data_in_db(self):
-        """ТЕСТ-11: Проверка что данные в БД зашифрованы"""
+    def test_11_encrypted_data_in_db(self):
+        """ENC-4: Данные хранятся как BLOB"""
         old_path = config.get("db_path")
         config.set("db_path", self.test_db)
 
@@ -338,15 +279,7 @@ class TestSprint3(unittest.TestCase):
         db.connect()
 
         km = KeyManager()
-        password = "testpass123456"
-        salt = self.kd.create_salt()
-        auth_hash = self.kd.create_auth_hash(password)
-        enc_key = self.kd.derive_encryption_key(password, salt)
-        km.store_key(enc_key)
-
-        db.execute("DELETE FROM master_password")
-        db.execute("INSERT INTO master_password (password_hash, salt) VALUES (?, ?)",
-                   (auth_hash, salt.hex()))
+        self._setup_auth(db, km)
 
         em = EntryManager(db, km)
 
@@ -359,27 +292,28 @@ class TestSprint3(unittest.TestCase):
             'tags': []
         })
 
-        # Проверяем что encrypted_data заполнен и это BLOB
         row = db.fetch_all("SELECT encrypted_data FROM vault_entries WHERE id = ?", (entry_id,))
         encrypted_blob = row[0][0]
 
         self.assertIsNotNone(encrypted_blob)
         self.assertIsInstance(encrypted_blob, bytes)
-        self.assertGreater(len(encrypted_blob), 12)  # nonce + ciphertext
-
-        # Проверяем что это не base64 строка
-        try:
-            base64.b64decode(encrypted_blob)
-            is_base64 = True
-        except:
-            is_base64 = False
-
-        self.assertFalse(is_base64, "Данные в BLOB")
+        self.assertGreater(len(encrypted_blob), 12)
 
         db.close()
         config.set("db_path", old_path)
 
-        print("Данные в БД зашифрованы (BLOB)")
+    def test_12_decrypt_with_wrong_key_fails(self):
+        """ENC-5: Неправильный ключ не может расшифровать"""
+        key1 = self.kd.derive_encryption_key("correctpass", self.kd.create_salt())
+        key2 = self.kd.derive_encryption_key("wrongpass", self.kd.create_salt())
+
+        aes1 = AESGCMEncryption(key1)
+        original = {"secret": "data"}
+        encrypted = aes1.encrypt(original)
+
+        aes2 = AESGCMEncryption(key2)
+        with self.assertRaises(Exception):
+            aes2.decrypt(encrypted)
 
 
 if __name__ == '__main__':

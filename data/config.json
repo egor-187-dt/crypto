@@ -1,7 +1,7 @@
 {
-  "db_path": "C:\\Users\\sizov\\AppData\\Local\\Temp\\tmp_b0ayes1\\test_vault.db",
+  "db_path": "C:\\Users\\sizov\\AppData\\Local\\Temp\\tmpkmmi1t6h\\test.db",
   "theme": "dark",
-  "encryption_method": "AES-256",
+  "encryption_method": "AES-256-GCM",
   "language": "ru",
   "argon2_time": 3,
   "argon2_memory": 65536,
@@ -16,5 +16,6 @@
   "require_symbols": true,
   "clipboard_timeout_seconds": 30,
   "max_login_attempts": 5,
-  "lockout_seconds": 30
+  "lockout_seconds": 30,
+  "first_run_complete": true
 }

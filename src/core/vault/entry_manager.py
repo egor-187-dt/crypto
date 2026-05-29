@@ -1,12 +1,15 @@
 import json
-import uuid
 from datetime import datetime
 from src.core.events import events
-from src.core.crypto.aes_gcm import AESGCMEncryption
-import base64
+from src.core.vault.encryption_service import AESGCMEncryption
 
 
 class EntryManager:
+    """
+    CRUD operations for vault entries with AES-256-GCM encryption
+    Implements Sprint 3 requirements: ARC-1, CRUD-1, CRUD-2, CRUD-3, CRUD-4
+    """
+
     def __init__(self, db_connection, key_manager):
         self.db = db_connection
         self.key_manager = key_manager
@@ -16,23 +19,18 @@ class EntryManager:
         if self._encryption is None:
             key = self.key_manager.load_key()
             if not key:
-                raise ValueError("No encryption key available. Vault is locked.")
+                raise ValueError("Vault is locked. Authentication required.")
             if len(key) != 32:
                 import hashlib
                 key = hashlib.sha256(key).digest()
             self._encryption = AESGCMEncryption(key)
         return self._encryption
 
-    def _check_key_available(self):
-        key = self.key_manager.load_key()
-        if not key:
-            raise ValueError("No encryption key available. Vault is locked.")
-        return True
+    def create_entry(self, data: dict) -> int:
+        """Create new entry with AES-256-GCM encryption"""
+        if not self.key_manager.load_key():
+            raise ValueError("Vault is locked")
 
-    def create_entry(self, data: dict) -> str:
-        self._check_key_available()
-
-        entry_id = str(uuid.uuid4())[:8]
         now = datetime.now().isoformat()
 
         payload = {
@@ -49,44 +47,41 @@ class EntryManager:
         }
 
         encrypted_blob = self._get_encryption().encrypt(payload)
+        tags_str = ','.join(payload['tags']) if payload['tags'] else ''
 
-        self.db.execute(
-            """INSERT INTO vault_entries 
-               (id, encrypted_data, title, username, url, notes, tags, created_at, updated_at, deleted) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (entry_id, encrypted_blob, payload['title'], payload['username'],
-             payload['url'], payload['notes'], ','.join(payload['tags']), now, now, 0)
+        cursor = self.db.execute(
+            "INSERT INTO vault_entries (encrypted_data, title, username, url, notes, tags, created_at, updated_at, deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (encrypted_blob, payload['title'], payload['username'], payload['url'], payload['notes'], tags_str, now,
+             now, 0)
         )
 
+        entry_id = cursor.lastrowid
         events.publish('entry_created', {'entry_id': entry_id})
         return entry_id
 
-    def get_entry(self, entry_id: str) -> dict:
-        self._check_key_available()
+    def get_entry(self, entry_id: int) -> dict:
+        """Retrieve and decrypt single entry"""
+        if not self.key_manager.load_key():
+            raise ValueError("Vault is locked")
 
-        row = self.db.fetch_all(
-            "SELECT encrypted_data FROM vault_entries WHERE id = ? AND (deleted = 0 OR deleted IS NULL)",
+        row = self.db.fetch_one(
+            "SELECT encrypted_data FROM vault_entries WHERE id = ? AND deleted = 0",
             (entry_id,)
         )
         if not row:
-            raise ValueError("Entry not found")
+            raise ValueError(f"Entry {entry_id} not found")
 
-        encrypted_blob = row[0][0]
-
-        if encrypted_blob is None:
-            raise ValueError(f"Entry {entry_id} has no encrypted data")
-
-        data = self._get_encryption().decrypt(encrypted_blob)
+        data = self._get_encryption().decrypt(row[0])
         data['id'] = entry_id
         return data
 
     def get_all_entries(self) -> list:
-        key = self.key_manager.load_key()
-        if not key:
+        """Retrieve all non-deleted entries"""
+        if not self.key_manager.load_key():
             return []
 
         rows = self.db.fetch_all(
-            "SELECT id, encrypted_data FROM vault_entries WHERE deleted = 0 OR deleted IS NULL"
+            "SELECT id, encrypted_data FROM vault_entries WHERE deleted = 0 ORDER BY updated_at DESC"
         )
         entries = []
 
@@ -99,12 +94,14 @@ class EntryManager:
                     data['id'] = entry_id
                     entries.append(data)
                 except Exception:
-                    pass
+                    continue
 
         return entries
 
-    def update_entry(self, entry_id: str, data: dict) -> dict:
-        self._check_key_available()
+    def update_entry(self, entry_id: int, data: dict) -> dict:
+        """Update existing entry with re-encryption"""
+        if not self.key_manager.load_key():
+            raise ValueError("Vault is locked")
 
         now = datetime.now().isoformat()
         existing = self.get_entry(entry_id)
@@ -123,43 +120,45 @@ class EntryManager:
         }
 
         encrypted_blob = self._get_encryption().encrypt(payload)
+        tags_str = ','.join(payload['tags']) if payload['tags'] else ''
 
         self.db.execute(
-            """UPDATE vault_entries 
-               SET encrypted_data = ?, title = ?, username = ?, url = ?, notes = ?, tags = ?, updated_at = ? 
-               WHERE id = ?""",
-            (encrypted_blob, payload['title'], payload['username'],
-             payload['url'], payload['notes'], ','.join(payload['tags']), now, entry_id)
+            "UPDATE vault_entries SET encrypted_data=?, title=?, username=?, url=?, notes=?, tags=?, updated_at=? WHERE id=? AND deleted=0",
+            (encrypted_blob, payload['title'], payload['username'], payload['url'], payload['notes'], tags_str, now,
+             entry_id)
         )
 
         events.publish('entry_updated', {'entry_id': entry_id})
         return self.get_entry(entry_id)
 
-    def delete_entry(self, entry_id: str, soft_delete: bool = True):
-        self._check_key_available()
+    def delete_entry(self, entry_id: int, soft_delete: bool = True) -> None:
+        """Soft delete or permanent delete entry"""
+        if not self.key_manager.load_key():
+            raise ValueError("Vault is locked")
 
         if soft_delete:
-            now = datetime.now().isoformat()
             self.db.execute(
-                "UPDATE vault_entries SET deleted = 1, deleted_at = ? WHERE id = ?",
-                (now, entry_id)
+                "UPDATE vault_entries SET deleted=1, deleted_at=? WHERE id=?",
+                (datetime.now().isoformat(), entry_id)
             )
         else:
-            self.db.execute("DELETE FROM vault_entries WHERE id = ?", (entry_id,))
+            self.db.execute("DELETE FROM vault_entries WHERE id=?", (entry_id,))
+
         events.publish('entry_deleted', {'entry_id': entry_id})
 
     def search(self, query: str) -> list:
+        """Search entries by title, username, url, notes"""
         if not query:
             return self.get_all_entries()
 
         query_lower = query.lower()
-        entries = self.get_all_entries()
         results = []
 
-        for e in entries:
-            if (query_lower in e.get('title', '').lower() or
-                    query_lower in e.get('username', '').lower() or
-                    query_lower in e.get('url', '').lower() or
-                    query_lower in e.get('notes', '').lower()):
-                results.append(e)
+        for entry in self.get_all_entries():
+            if (query_lower in entry.get('title', '').lower() or
+                    query_lower in entry.get('username', '').lower() or
+                    query_lower in entry.get('url', '').lower() or
+                    query_lower in entry.get('notes', '').lower()):
+                results.append(entry)
+
         return results

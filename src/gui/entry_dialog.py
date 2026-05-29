@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import ttk, messagebox
 
 
 class EntryDialog:
@@ -22,7 +22,6 @@ class EntryDialog:
         if entry_data:
             self._fill_data()
 
-        # Ждем пока диалог закроется
         self.dialog.wait_window()
 
     def _create_ui(self):
@@ -47,14 +46,13 @@ class EntryDialog:
         pwd_frame = tk.Frame(self.dialog)
         pwd_frame.grid(row=row, column=1, padx=10, pady=5)
 
-        self.password_entry = tk.Entry(pwd_frame, width=30)
+        self.password_entry = tk.Entry(pwd_frame, width=25)
         self.password_entry.pack(side=tk.LEFT)
 
-        tk.Button(pwd_frame, text="Сгенерировать", command=self.generate_password).pack(side=tk.LEFT, padx=5)
-        row += 1
+        tk.Button(pwd_frame, text="Сгенерировать", command=self._generate_password).pack(side=tk.LEFT, padx=5)
 
-        self.strength_label = tk.Label(self.dialog, text="", fg="gray")
-        self.strength_label.grid(row=row, column=1, sticky='w', padx=10)
+        self.strength_label = tk.Label(pwd_frame, text="", fg="gray", font=("Arial", 8))
+        self.strength_label.pack(side=tk.LEFT, padx=5)
         row += 1
 
         tk.Label(self.dialog, text="Категория").grid(row=row, column=0, sticky='w', padx=10, pady=5)
@@ -75,10 +73,10 @@ class EntryDialog:
         btn_frame = tk.Frame(self.dialog)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=20)
 
-        tk.Button(btn_frame, text="OK", command=self.save, bg="lightblue", width=10).pack(side=tk.LEFT, padx=5)
-        tk.Button(btn_frame, text="Отмена", command=self.cancel, width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="OK", command=self._save, bg="lightblue", width=10).pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Отмена", command=self._cancel, width=10).pack(side=tk.LEFT, padx=5)
 
-        self.password_entry.bind('<KeyRelease>', self.update_strength)
+        self.password_entry.bind('<KeyRelease>', self._update_strength)
 
     def _fill_data(self):
         self.title_entry.insert(0, self.entry_data.get('title', ''))
@@ -88,28 +86,33 @@ class EntryDialog:
         self.category_entry.insert(0, self.entry_data.get('category', ''))
         tags = self.entry_data.get('tags', [])
         if tags:
-            self.tags_entry.insert(0, ', '.join(tags))
+            if isinstance(tags, list):
+                self.tags_entry.insert(0, ', '.join(tags))
+            else:
+                self.tags_entry.insert(0, str(tags))
         self.notes_text.insert('1.0', self.entry_data.get('notes', ''))
-        self.update_strength()
+        self._update_strength()
 
-    def generate_password(self):
+    def _generate_password(self):
         pwd = self.pwd_gen.generate()
         self.password_entry.delete(0, tk.END)
         self.password_entry.insert(0, pwd)
-        self.update_strength()
+        self._update_strength()
 
-    def update_strength(self, event=None):
+    def _update_strength(self, event=None):
         pwd = self.password_entry.get()
         if pwd:
             strength = self.pwd_gen.check_strength(pwd)
             colors = {'weak': 'red', 'medium': 'orange', 'strong': 'green'}
             texts = {'weak': 'Слабый', 'medium': 'Средний', 'strong': 'Сильный'}
-            self.strength_label.config(text=f"Сложность: {texts.get(strength['strength'], '')}",
-                                       fg=colors.get(strength['strength'], 'gray'))
+            self.strength_label.config(
+                text=texts.get(strength['strength'], ''),
+                fg=colors.get(strength['strength'], 'gray')
+            )
         else:
             self.strength_label.config(text="")
 
-    def save(self):
+    def _save(self):
         title = self.title_entry.get().strip()
         password = self.password_entry.get()
 
@@ -117,7 +120,11 @@ class EntryDialog:
             messagebox.showerror("Ошибка", "Заполните название и пароль")
             return
 
-        tags = [t.strip() for t in self.tags_entry.get().split(',') if t.strip()]
+        tags_raw = self.tags_entry.get().strip()
+        if tags_raw:
+            tags = [t.strip() for t in tags_raw.split(',') if t.strip()]
+        else:
+            tags = []
 
         self.result = {
             'title': title,
@@ -130,6 +137,6 @@ class EntryDialog:
         }
         self.dialog.destroy()
 
-    def cancel(self):
+    def _cancel(self):
         self.result = None
         self.dialog.destroy()

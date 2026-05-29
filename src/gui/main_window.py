@@ -1,6 +1,3 @@
-"""
-Main Window for CryptoSafe Manager - Updated for Sprint 2 with working lock
-"""
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
@@ -16,6 +13,7 @@ from src.core.vault.password_generator import PasswordGenerator
 from src.gui.entry_dialog import EntryDialog
 from src.gui.change_password_dialog import ChangePasswordDialog
 from src.gui.login_dialog import LoginDialog
+from src.gui.settings_dialog import SettingsDialog
 from src.database.db import db
 
 
@@ -36,6 +34,26 @@ class MainWindow:
         self.auto_lock_minutes = config.get("auto_lock_timeout", 60)
         self.is_locked_display = False
 
+        self._check_first_run()
+
+    def _check_first_run(self):
+        try:
+            result = db.fetch_all("SELECT COUNT(*) FROM master_password")
+            has_master_password = result and result[0][0] > 0
+
+            if has_master_password:
+                LoginDialog(self.root, self._on_login_success)
+            else:
+                self._show_setup_wizard()
+        except Exception as e:
+            print(f"Error: {e}")
+            self._show_setup_wizard()
+
+    def _show_setup_wizard(self):
+        from src.gui.setup_wizard import SetupWizard
+        SetupWizard(self.root, self._on_login_success)
+
+    def _on_login_success(self):
         self._setup_ui()
         self._bind_events()
         self._start_auto_lock_timer()
@@ -47,6 +65,9 @@ class MainWindow:
         events.publish("main_window_ready", {})
 
     def _setup_ui(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
@@ -177,7 +198,6 @@ class MainWindow:
             self.tree.config(cursor="arrow")
 
             self.status_bar.config(text="Статус: ЗАБЛОКИРОВАНО - нажмите Разблокировать для входа")
-
             self.lock_btn.config(text="Разблокировать", command=self._unlock_vault)
 
             events.publish("vault_locked", {"timestamp": datetime.now().isoformat()})
@@ -195,7 +215,6 @@ class MainWindow:
             self.search_entry.config(state='normal')
 
             self.status_bar.config(text="Готов | Статус: разблокировано")
-
             self.lock_btn.config(text="Заблокировать", command=self._lock_vault)
 
             events.publish("vault_unlocked", {"timestamp": datetime.now().isoformat()})
@@ -234,18 +253,23 @@ class MainWindow:
 
         try:
             entries = self.entry_manager.get_all_entries()
+
             for entry in entries:
+                username = entry.get('username', '')
+                if len(username) > 4:
+                    username = username[:4] + '••••'
+
                 self.tree.insert(
                     "",
                     tk.END,
                     values=(
-                        entry.get('id', '')[:8],
+                        entry.get('id', ''),
                         entry.get('title', ''),
-                        entry.get('username', ''),
+                        username,
                         entry.get('url', '')[:50],
                         entry.get('updated_at', '')[:19]
                     ),
-                    tags=(entry.get('id', ''),)
+                    tags=(str(entry.get('id', '')),)
                 )
 
             self.status_bar.config(text=f"Загружено записей: {len(entries)} | Статус: разблокировано")
@@ -267,13 +291,17 @@ class MainWindow:
         try:
             entries = self.entry_manager.search(query)
             for entry in entries:
+                username = entry.get('username', '')
+                if len(username) > 4:
+                    username = username[:4] + '••••'
+
                 self.tree.insert(
                     "",
                     tk.END,
                     values=(
-                        entry.get('id', '')[:8],
+                        entry.get('id', ''),
                         entry.get('title', ''),
-                        entry.get('username', ''),
+                        username,
                         entry.get('url', '')[:50],
                         entry.get('updated_at', '')[:19]
                     )
@@ -314,10 +342,10 @@ class MainWindow:
             return
 
         try:
-            entry = self.entry_manager.get_entry(entry_id)
+            entry = self.entry_manager.get_entry(int(entry_id))
             dialog = EntryDialog(self.root, self.password_gen, entry)
             if dialog.result:
-                self.entry_manager.update_entry(entry_id, dialog.result)
+                self.entry_manager.update_entry(int(entry_id), dialog.result)
                 self._refresh_entries()
                 self.status_bar.config(text="Запись обновлена")
         except Exception as e:
@@ -341,7 +369,7 @@ class MainWindow:
 
         if entry_id:
             try:
-                self.entry_manager.delete_entry(entry_id)
+                self.entry_manager.delete_entry(int(entry_id))
                 self._refresh_entries()
                 self.status_bar.config(text="Запись удалена")
             except Exception as e:
@@ -388,13 +416,12 @@ class MainWindow:
             messagebox.showwarning("Внимание", "Хранилище заблокировано")
             return
 
-        from src.gui.settings_dialog import SettingsDialog
         SettingsDialog(self.root)
 
     def _about(self):
         about_text = """CryptoSafe Manager - Безопасный менеджер паролей
 
-Версия: 1.0.0 (Sprint 2)
+Версия: 1.0.0 (Sprint 3)
 Криптография: AES-256-GCM, Argon2id, PBKDF2
 
 Особенности:
@@ -402,6 +429,7 @@ class MainWindow:
 - Автоматическая блокировка при неактивности
 - Защита от brute-force атак
 - Генерация надежных паролей
+- AES-256-GCM шифрование каждой записи
 
 2025 CryptoSafe Team"""
 
