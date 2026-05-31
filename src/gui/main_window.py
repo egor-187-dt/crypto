@@ -10,10 +10,12 @@ from src.core.crypto.authentication import Authenticator
 from src.core.crypto.key_derivation import KeyDerivation
 from src.core.vault.entry_manager import EntryManager
 from src.core.vault.password_generator import PasswordGenerator
+from src.core.clipboard import get_clipboard_service
 from src.gui.entry_dialog import EntryDialog
 from src.gui.change_password_dialog import ChangePasswordDialog
 from src.gui.login_dialog import LoginDialog
 from src.gui.settings_dialog import SettingsDialog
+from src.gui.widgets.clipboard_statusbar import ClipboardStatusBar
 from src.database.db import db
 
 
@@ -21,13 +23,15 @@ class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("CryptoSafe Manager")
-        self.root.geometry("900x600")
+        self.root.geometry("950x650")
 
         self.kd = KeyDerivation()
         self.key_manager = KeyManager()
         self.auth = Authenticator(self.kd)
         self.entry_manager = EntryManager(db, self.key_manager)
         self.password_gen = PasswordGenerator()
+
+        self.clipboard_service = get_clipboard_service(config)
 
         self.last_activity = datetime.now()
         self.auto_lock_id = None
@@ -61,6 +65,8 @@ class MainWindow:
 
         state.login()
         state.update_activity()
+
+        self.clipboard_service.is_vault_unlocked = True
 
         events.publish("main_window_ready", {})
 
@@ -103,13 +109,22 @@ class MainWindow:
         self.lock_btn = ttk.Button(toolbar, text="Заблокировать", command=self._lock_vault)
         self.lock_btn.pack(side=tk.LEFT, padx=2)
 
+        self.status_bar_frame = ttk.Frame(self.root)
+        self.status_bar_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
         self.status_bar = ttk.Label(
-            self.root,
+            self.status_bar_frame,
             text="Готов | Статус: разблокировано",
             relief=tk.SUNKEN,
             anchor=tk.W
         )
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.clipboard_status_bar = ClipboardStatusBar(
+            self.status_bar_frame,
+            self.clipboard_service
+        )
+        self.clipboard_status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         search_frame = ttk.Frame(self.root)
         search_frame.pack(side=tk.TOP, fill=tk.X, padx=10, pady=(0, 5))
@@ -137,10 +152,10 @@ class MainWindow:
         self.tree.heading("URL", text="URL")
         self.tree.heading("Обновлено", text="Обновлено")
 
-        self.tree.column("ID", width=50)
+        self.tree.column("ID", width=50, anchor="center")
         self.tree.column("Название", width=200)
         self.tree.column("Логин", width=150)
-        self.tree.column("URL", width=200)
+        self.tree.column("URL", width=350)
         self.tree.column("Обновлено", width=150)
 
         scrollbar = ttk.Scrollbar(self.tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
@@ -151,6 +166,7 @@ class MainWindow:
 
         self.tree.bind('<Double-Button-1>', lambda e: self._edit_entry())
         self.tree.bind('<Delete>', lambda e: self._delete_entry())
+        self.tree.bind('<Button-3>', self._on_right_click)
 
         self.root.bind('<Any-KeyPress>', self._on_activity)
         self.root.bind('<Any-ButtonPress>', self._on_activity)
@@ -162,6 +178,22 @@ class MainWindow:
         events.subscribe("user_logged_out", lambda data: self._on_logout())
         events.subscribe("vault_locked", lambda data: self._on_vault_locked())
         events.subscribe("vault_unlocked", lambda data: self._on_vault_unlocked())
+        events.subscribe("clipboard_notification", self._on_clipboard_notification)
+        events.subscribe("clipboard_copied", self._on_clipboard_copied)
+
+    def _on_clipboard_notification(self, data):
+        if data and 'message' in data:
+            self.status_bar.config(text=data['message'])
+            self.root.after(3000, lambda: self._refresh_status_text())
+
+    def _on_clipboard_copied(self, data):
+        if data:
+            self.status_bar.config(text=f"Скопировано: {data.get('data_type', 'данные')}")
+            self.root.after(2000, lambda: self._refresh_status_text())
+
+    def _refresh_status_text(self):
+        if not self.is_locked_display:
+            self.status_bar.config(text="Готов | Статус: разблокировано")
 
     def _on_activity(self, event=None):
         if not self.is_locked_display and state.is_logged_in:
@@ -189,6 +221,8 @@ class MainWindow:
             state.lock()
             self.is_locked_display = True
             self.key_manager.clear_key()
+            self.clipboard_service.is_vault_unlocked = False
+            self.clipboard_service.clear_clipboard(reason="vault_locked")
             self._clear_entries_display()
 
             self.add_btn.config(state='disabled')
@@ -207,6 +241,7 @@ class MainWindow:
             state.unlock()
             self.is_locked_display = False
             self.key_manager.load_key()
+            self.clipboard_service.is_vault_unlocked = True
             self._refresh_entries()
 
             self.add_btn.config(state='normal')
@@ -236,6 +271,8 @@ class MainWindow:
         self._clear_entries_display()
         state.logout()
         self.key_manager.clear_key()
+        self.clipboard_service.is_vault_unlocked = False
+        self.clipboard_service.clear_clipboard(reason="logout")
         self.status_bar.config(text="Статус: ВЫ ВЫШЛИ - перезапустите приложение")
 
         self.add_btn.config(state='disabled')
@@ -243,6 +280,59 @@ class MainWindow:
         self.delete_btn.config(state='disabled')
         self.lock_btn.config(state='disabled')
         self.search_entry.config(state='disabled')
+
+    def _copy_password_to_clipboard(self, entry_id, password):
+        if self.is_locked_display:
+            messagebox.showwarning("Внимание", "Хранилище заблокировано")
+            return
+        if not password:
+            messagebox.showwarning("Внимание", "Нет пароля для копирования")
+            return
+        self.clipboard_service.copy_to_clipboard(password, "password", entry_id)
+
+    def _copy_username_to_clipboard(self, entry_id, username):
+        if self.is_locked_display:
+            messagebox.showwarning("Внимание", "Хранилище заблокировано")
+            return
+        if not username:
+            messagebox.showwarning("Внимание", "Нет логина для копирования")
+            return
+        self.clipboard_service.copy_to_clipboard(username, "username", entry_id)
+
+    def _on_right_click(self, event):
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+
+        self.tree.selection_set(item)
+
+        values = self.tree.item(item, 'values')
+        if not values:
+            return
+
+        entry_id = values[0]
+
+        try:
+            entry = self.entry_manager.get_entry(int(entry_id))
+            password = entry.get('password', '')
+            username = entry.get('username', '')
+
+            popup = tk.Menu(self.root, tearoff=0)
+            popup.add_command(
+                label="Копировать пароль",
+                command=lambda eid=entry_id, p=password: self._copy_password_to_clipboard(eid, p)
+            )
+            popup.add_command(
+                label="Копировать логин",
+                command=lambda eid=entry_id, u=username: self._copy_username_to_clipboard(eid, u)
+            )
+            popup.add_separator()
+            popup.add_command(label="Редактировать", command=self._edit_entry)
+            popup.add_command(label="Удалить", command=self._delete_entry)
+
+            popup.post(event.x_root, event.y_root)
+        except Exception as e:
+            print(f"Error: {e}")
 
     def _refresh_entries(self):
         if self.is_locked_display:
@@ -255,21 +345,21 @@ class MainWindow:
             entries = self.entry_manager.get_all_entries()
 
             for entry in entries:
+                entry_id = entry.get('id', '')
                 username = entry.get('username', '')
-                if len(username) > 4:
-                    username = username[:4] + '••••'
+
+                username_display = username[:4] + '****' if len(username) > 4 else username
 
                 self.tree.insert(
                     "",
                     tk.END,
                     values=(
-                        entry.get('id', ''),
+                        entry_id,
                         entry.get('title', ''),
-                        username,
+                        username_display,
                         entry.get('url', '')[:50],
                         entry.get('updated_at', '')[:19]
-                    ),
-                    tags=(str(entry.get('id', '')),)
+                    )
                 )
 
             self.status_bar.config(text=f"Загружено записей: {len(entries)} | Статус: разблокировано")
@@ -291,17 +381,18 @@ class MainWindow:
         try:
             entries = self.entry_manager.search(query)
             for entry in entries:
+                entry_id = entry.get('id', '')
                 username = entry.get('username', '')
-                if len(username) > 4:
-                    username = username[:4] + '••••'
+
+                username_display = username[:4] + '****' if len(username) > 4 else username
 
                 self.tree.insert(
                     "",
                     tk.END,
                     values=(
-                        entry.get('id', ''),
+                        entry_id,
                         entry.get('title', ''),
-                        username,
+                        username_display,
                         entry.get('url', '')[:50],
                         entry.get('updated_at', '')[:19]
                     )
@@ -335,11 +426,12 @@ class MainWindow:
             messagebox.showwarning("Внимание", "Выберите запись для редактирования")
             return
 
-        item = self.tree.item(selection[0])
-        entry_id = item['values'][0] if item['values'] else None
-
-        if not entry_id:
+        item = selection[0]
+        values = self.tree.item(item, 'values')
+        if not values:
             return
+
+        entry_id = values[0]
 
         try:
             entry = self.entry_manager.get_entry(int(entry_id))
@@ -364,8 +456,12 @@ class MainWindow:
         if not messagebox.askyesno("Подтверждение", "Удалить выбранную запись?"):
             return
 
-        item = self.tree.item(selection[0])
-        entry_id = item['values'][0] if item['values'] else None
+        item = selection[0]
+        values = self.tree.item(item, 'values')
+        if not values:
+            return
+
+        entry_id = values[0]
 
         if entry_id:
             try:
@@ -400,6 +496,8 @@ class MainWindow:
             self._clear_entries_display()
             self.auth.logout()
             self.key_manager.clear_key()
+            self.clipboard_service.is_vault_unlocked = False
+            self.clipboard_service.clear_clipboard(reason="logout")
             state.logout()
             self.status_bar.config(text="Статус: ВЫ ВЫШЛИ - перезапустите приложение")
 
@@ -421,7 +519,7 @@ class MainWindow:
     def _about(self):
         about_text = """CryptoSafe Manager - Безопасный менеджер паролей
 
-Версия: 1.0.0 (Sprint 3)
+Версия: 1.0.0 (Sprint 4)
 Криптография: AES-256-GCM, Argon2id, PBKDF2
 
 Особенности:
@@ -430,12 +528,17 @@ class MainWindow:
 - Защита от brute-force атак
 - Генерация надежных паролей
 - AES-256-GCM шифрование каждой записи
+- Защищенный буфер обмена с автоочисткой (Sprint 4)
+- Копирование пароля/логина по правому клику (UI-1)
+- Статус-бар с таймером обратного отсчета (UI-2)
+- Нотификации при копировании (UI-3)
 
 2025 CryptoSafe Team"""
 
         messagebox.showinfo("О программе", about_text)
 
     def _quit(self):
+        self.clipboard_service.shutdown()
         if messagebox.askokcancel("Выход", "Выйти из приложения?"):
             self.key_manager.clear_key()
             self.root.quit()

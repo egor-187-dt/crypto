@@ -1,5 +1,5 @@
 {
-  "db_path": "C:\\Users\\sizov\\AppData\\Local\\Temp\\tmpkmmi1t6h\\test.db",
+  "db_path": "C:\\Users\\sizov\\PycharmProjects\\CryptoSafe Manager\\data\\vault.db",
   "theme": "dark",
   "encryption_method": "AES-256-GCM",
   "language": "ru",
