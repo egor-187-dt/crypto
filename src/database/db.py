@@ -13,6 +13,34 @@ class Database:
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
+        self._upgrade_audit_table()  # Добавляем обновление таблицы аудита
+
+    def _upgrade_audit_table(self):
+        """Add missing columns to audit_log table for Sprint 5."""
+        try:
+            # Проверяем существующие колонки
+            cursor = self.conn.execute("PRAGMA table_info(audit_log)")
+            existing_columns = [col[1] for col in cursor.fetchall()]
+
+            # Добавляем недостающие колонки
+            if 'sequence_number' not in existing_columns:
+                self.conn.execute("ALTER TABLE audit_log ADD COLUMN sequence_number INTEGER")
+
+            if 'previous_hash' not in existing_columns:
+                self.conn.execute("ALTER TABLE audit_log ADD COLUMN previous_hash TEXT")
+
+            if 'entry_hash' not in existing_columns:
+                self.conn.execute("ALTER TABLE audit_log ADD COLUMN entry_hash TEXT")
+
+            if 'entry_data' not in existing_columns:
+                self.conn.execute("ALTER TABLE audit_log ADD COLUMN entry_data TEXT")
+
+            # Обновляем существующие записи
+            self.conn.execute("UPDATE audit_log SET sequence_number = rowid WHERE sequence_number IS NULL")
+
+            self.conn.commit()
+        except Exception as e:
+            print(f"Error upgrading audit table: {e}")
 
     def _create_tables(self):
         self.conn.execute('''
@@ -73,7 +101,11 @@ class Database:
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 entry_id INTEGER,
                 details TEXT,
-                signature TEXT
+                signature TEXT,
+                sequence_number INTEGER,
+                previous_hash TEXT,
+                entry_hash TEXT,
+                entry_data TEXT
             )
         ''')
 

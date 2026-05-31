@@ -34,7 +34,7 @@ class SettingsDialog:
         notebook = ttk.Notebook(main_frame)
         notebook.pack(fill=tk.BOTH, expand=True)
 
-        # Вкладка: Безопасность (существующая)
+        # Вкладка: Безопасность
         security_frame = ttk.Frame(notebook, padding="10")
         notebook.add(security_frame, text="Безопасность")
 
@@ -60,11 +60,11 @@ class SettingsDialog:
         )
         self.cache_timeout_spinbox.grid(row=1, column=1, sticky='w', padx=10, pady=5)
 
-        # Вкладка: Буфер обмена (новая, CFG-1, CFG-3)
+        # Вкладка: Буфер обмена
         clipboard_frame = ttk.Frame(notebook, padding="10")
         notebook.add(clipboard_frame, text="Буфер обмена")
 
-        # Пресеты (CFG-3)
+        # Пресеты
         preset_frame = ttk.LabelFrame(clipboard_frame, text="Пресеты", padding="10")
         preset_frame.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 15))
 
@@ -75,7 +75,7 @@ class SettingsDialog:
         ttk.Button(preset_frame, text="Public Computer (5 сек)",
                    command=lambda: self._apply_preset('public_computer')).pack(side=tk.LEFT, padx=5)
 
-        # Таймаут автоочистки (CLIP-2)
+        # Таймаут автоочистки
         ttk.Label(clipboard_frame, text="Автоочистка (секунд):").grid(row=1, column=0, sticky='w', pady=5)
         self.clipboard_timeout_var = tk.StringVar()
         self.clipboard_timeout_spinbox = ttk.Spinbox(
@@ -126,7 +126,7 @@ class SettingsDialog:
         self.status_text = tk.StringVar(value="Неактивен")
         ttk.Label(status_frame, textvariable=self.status_text, font=("Arial", 9)).pack(anchor='w')
 
-        # Вкладка: Интерфейс (существующая)
+        # Вкладка: Интерфейс
         interface_frame = ttk.Frame(notebook, padding="10")
         notebook.add(interface_frame, text="Интерфейс")
 
@@ -158,7 +158,7 @@ class SettingsDialog:
         ).pack(side=tk.RIGHT)
 
     def _apply_preset(self, preset_name):
-        """Применить пресет (CFG-3)"""
+        """Применить пресет"""
         if self.clipboard_service:
             self.clipboard_service.apply_preset(preset_name)
             self._load_settings()
@@ -175,24 +175,18 @@ class SettingsDialog:
 
     def _load_settings(self):
         """Загрузить настройки из конфига"""
-        # Безопасность
         self.auto_lock_var.set(str(config.get("auto_lock_timeout", 60)))
         self.cache_timeout_var.set(str(config.get("cache_timeout", 60)))
-
-        # Буфер обмена
         self.clipboard_timeout_var.set(str(config.get("clipboard_timeout", 30)))
         self.security_level_var.set(config.get("clipboard_security_level", "basic"))
         self.notifications_var.set(config.get("clipboard_notifications", True))
         self.accelerate_var.set(config.get("clipboard_accelerate_on_access", False))
-
-        # Интерфейс
         self.theme_var.set(config.get("theme", "dark"))
 
         self._update_status()
 
     def _save_settings(self):
         try:
-            # Валидация
             auto_lock = int(self.auto_lock_var.get())
             cache_timeout = int(self.cache_timeout_var.get())
             clipboard_timeout = int(self.clipboard_timeout_var.get())
@@ -206,25 +200,22 @@ class SettingsDialog:
             if clipboard_timeout < 0 or clipboard_timeout > 300:
                 raise ValueError("Таймаут буфера должен быть от 0 до 300 секунд")
 
-            # Сохраняем настройки безопасности
             config.set("auto_lock_timeout", auto_lock)
             config.set("cache_timeout", cache_timeout)
-
-            # Сохраняем настройки буфера обмена (CFG-2)
             config.set("clipboard_timeout", clipboard_timeout)
             config.set("clipboard_security_level", self.security_level_var.get())
             config.set("clipboard_notifications", self.notifications_var.get())
             config.set("clipboard_accelerate_on_access", self.accelerate_var.get())
+            config.set("theme", self.theme_var.get())
 
-            # Применяем к сервису
             if self.clipboard_service:
                 self.clipboard_service.set_timeout(clipboard_timeout)
                 self.clipboard_service.set_security_level(self.security_level_var.get())
                 self.clipboard_service.set_notifications(self.notifications_var.get())
                 self.clipboard_service.set_accelerate_on_access(self.accelerate_var.get())
 
-            # Сохраняем настройки интерфейса
-            config.set("theme", self.theme_var.get())
+            # Применяем тему
+            self._apply_theme_to_app()
 
             events.publish("settings_updated", {
                 "auto_lock_timeout": auto_lock,
@@ -241,3 +232,78 @@ class SettingsDialog:
 
         except ValueError as e:
             messagebox.showerror("Ошибка", str(e), parent=self.dialog)
+
+    def _apply_theme_to_app(self):
+        """Применить тему ко всему приложению"""
+        theme_name = self.theme_var.get()
+        style = ttk.Style()
+
+        # Находим корневое окно
+        root = self.parent
+        while hasattr(root, 'master') and root.master:
+            root = root.master
+        # Если root не Tk, пробуем найти через winfo_toplevel
+        if not isinstance(root, (tk.Tk, tk.Toplevel)):
+            root = self.parent.winfo_toplevel()
+
+        if root is None:
+            return
+
+        if theme_name == "dark":
+            bg_color = "#1e1e1e"
+            fg_color = "#ffffff"
+            tree_bg = "#2d2d2d"
+            tree_fg = "#f0f0f0"
+            select_bg = "#404040"
+            entry_bg = "#3c3c3c"
+        elif theme_name == "light":
+            bg_color = "#f0f0f0"
+            fg_color = "#000000"
+            tree_bg = "#ffffff"
+            tree_fg = "#000000"
+            select_bg = "#cce8ff"
+            entry_bg = "#ffffff"
+        else:
+            return
+
+        # Настройка стилей ttk
+        style.configure("TFrame", background=bg_color)
+        style.configure("TLabel", background=bg_color, foreground=fg_color)
+        style.configure("TLabelframe", background=bg_color, foreground=fg_color)
+        style.configure("TLabelframe.Label", background=bg_color, foreground=fg_color)
+        style.configure("TButton", background=bg_color)
+        style.configure("TEntry", fieldbackground=entry_bg, foreground=tree_fg)
+        style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg)
+        style.map("Treeview", background=[('selected', select_bg)])
+        style.configure("Treeview.Heading", background=bg_color, foreground=fg_color)
+        style.configure("TNotebook", background=bg_color)
+        style.configure("TNotebook.Tab", background=bg_color, foreground=fg_color)
+
+        # Настройка корневого окна
+        root.configure(bg=bg_color)
+
+        # Обход всех виджетов
+        self._apply_theme_to_widgets(root, bg_color, fg_color)
+
+    def _apply_theme_to_widgets(self, widget, bg_color, fg_color):
+        """Рекурсивно применяем тему ко всем виджетам"""
+        try:
+            if isinstance(widget, (tk.Frame, tk.LabelFrame, tk.Toplevel, tk.Tk)):
+                widget.configure(bg=bg_color)
+            elif isinstance(widget, tk.Label):
+                widget.configure(bg=bg_color, fg=fg_color)
+            elif isinstance(widget, tk.Button):
+                widget.configure(bg=bg_color, fg=fg_color, activebackground=bg_color)
+            elif isinstance(widget, tk.Entry):
+                widget.configure(bg=bg_color, fg=fg_color, insertbackground=fg_color)
+            elif isinstance(widget, tk.Text):
+                widget.configure(bg=bg_color, fg=fg_color, insertbackground=fg_color)
+            elif isinstance(widget, tk.Listbox):
+                widget.configure(bg=bg_color, fg=fg_color)
+            elif isinstance(widget, tk.Canvas):
+                widget.configure(bg=bg_color)
+        except:
+            pass
+
+        for child in widget.winfo_children():
+            self._apply_theme_to_widgets(child, bg_color, fg_color)
